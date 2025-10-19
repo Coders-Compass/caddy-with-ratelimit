@@ -1,0 +1,143 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/build-and-push.yml"
+  schedule:
+    # Rebuild weekly on Sundays to get latest packages
+    - cron: "17 0 * * 0"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: coders-compass/caddy-with-ratelimit
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        run: |
+          docker build -t caddy-with-ratelimit:test .
+
+      - name: Verify rate_limit module is loaded
+        run: |
+          docker run --rm caddy-with-ratelimit:test caddy list-modules | grep rate_limit
+          echo "✓ Rate limit module verified"
+
+      - name: Start test environment
+        run: |
+          cd test
+          docker compose up -d
+          
+      - name: Wait for Caddy to be ready
+        run: |
+          echo "Waiting for Caddy to start..."
+          max_attempts=30
+          attempt=0
+          while ! curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 | grep -q "200"; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge $max_attempts ]; then
+              echo "✗ Caddy did not become ready in time"
+              docker compose -f test/docker-compose.yml logs
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "✓ Caddy is ready"
+
+      - name: Run basic rate limiting tests
+        run: |
+          cd test
+          chmod +x test.sh
+          ./test.sh
+
+      - name: Install oha for load testing
+        run: |
+          LATEST_OHA=$(curl -s https://api.github.com/repos/hatoo/oha/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+          echo "Installing oha ${LATEST_OHA}"
+          curl -L https://github.com/hatoo/oha/releases/download/${LATEST_OHA}/oha-linux-amd64 -o oha
+          chmod +x oha
+          sudo mv oha /usr/local/bin/
+          oha --version
+
+      - name: Run load tests with oha
+        run: |
+          cd test
+          chmod +x load-test.sh
+          ./load-test.sh
+
+      - name: Show Caddy logs on failure
+        if: failure()
+        run: |
+          docker compose -f test/docker-compose.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd test
+          docker compose down -v
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5.8.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+            type=ref,event=branch
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
