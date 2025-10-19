@@ -1,0 +1,19 @@
+# Caddy data and config
+/caddy/
+
+# Test artifacts
+/test/caddy/
+
+# macOS
+.DS_Store
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
