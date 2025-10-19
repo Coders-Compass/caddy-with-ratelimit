@@ -1,0 +1,12 @@
+services:
+  caddy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+    restart: unless-stopped

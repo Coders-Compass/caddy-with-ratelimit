@@ -1,0 +1,17 @@
+{
+    order rate_limit before respond
+}
+
+:80 {
+    # Rate limit: 5 requests per 10 seconds per IP
+    rate_limit {
+        zone test_zone {
+            key {http.request.remote.host}
+            events 5
+            window 10s
+        }
+    }
+
+    # Simple endpoint that responds with client IP
+    respond "OK - Your IP: {http.request.remote.host}" 200
+}
