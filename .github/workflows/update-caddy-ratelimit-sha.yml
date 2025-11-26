@@ -1,0 +1,119 @@
+name: Update Caddy Rate Limit Plugin SHA
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest commit SHA from caddy-ratelimit
+        id: get-sha
+        run: |
+          # Fetch the latest commit SHA from the main branch
+          LATEST_SHA=$(curl -s https://api.github.com/repos/mholt/caddy-ratelimit/commits/main | jq -r '.sha')
+          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          echo "Latest SHA: $LATEST_SHA"
+
+          # Get current SHA from Dockerfile
+          CURRENT_SHA=$(grep -oP 'github\.com/mholt/caddy-ratelimit@\K[a-f0-9]{40}' Dockerfile)
+          echo "current_sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+          echo "Current SHA: $CURRENT_SHA"
+
+          # Check if update is needed
+          if [ "$LATEST_SHA" = "$CURRENT_SHA" ]; then
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "No update needed - already on latest commit"
+          else
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "Update needed: $CURRENT_SHA -> $LATEST_SHA"
+          fi
+
+      - name: Get commit details
+        if: steps.get-sha.outputs.needs_update == 'true'
+        id: commit-details
+        run: |
+          # Get commit message and date
+          COMMIT_INFO=$(curl -s https://api.github.com/repos/mholt/caddy-ratelimit/commits/${{ steps.get-sha.outputs.latest_sha }})
+          COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message' | head -n 1)
+          COMMIT_DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.author.date')
+          COMMIT_URL=$(echo "$COMMIT_INFO" | jq -r '.html_url')
+
+          echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "commit_date=$COMMIT_DATE" >> $GITHUB_OUTPUT
+          echo "commit_url=$COMMIT_URL" >> $GITHUB_OUTPUT
+
+          echo "Commit Message: $COMMIT_MESSAGE"
+          echo "Commit Date: $COMMIT_DATE"
+          echo "Commit URL: $COMMIT_URL"
+
+      - name: Update Dockerfile
+        if: steps.get-sha.outputs.needs_update == 'true'
+        run: |
+          # Replace the SHA in the Dockerfile
+          sed -i "s/github\.com\/mholt\/caddy-ratelimit@[a-f0-9]\{40\}/github.com\/mholt\/caddy-ratelimit@${{ steps.get-sha.outputs.latest_sha }}/g" Dockerfile
+
+          echo "Updated Dockerfile with new SHA"
+          git diff Dockerfile
+
+      - name: Create Pull Request
+        if: steps.get-sha.outputs.needs_update == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            Update caddy-ratelimit plugin to ${{ steps.get-sha.outputs.latest_sha }}
+
+            Latest commit from mholt/caddy-ratelimit:
+            - Message: ${{ steps.commit-details.outputs.commit_message }}
+            - Date: ${{ steps.commit-details.outputs.commit_date }}
+            - URL: ${{ steps.commit-details.outputs.commit_url }}
+          branch: update-caddy-ratelimit-sha
+          delete-branch: true
+          title: "chore: update caddy-ratelimit plugin to latest commit"
+          body: |
+            ## 🔄 Automated Plugin Update
+
+            This PR updates the `mholt/caddy-ratelimit` plugin to the latest commit.
+
+            ### Changes
+            - **Previous SHA**: `${{ steps.get-sha.outputs.current_sha }}`
+            - **New SHA**: `${{ steps.get-sha.outputs.latest_sha }}`
+
+            ### Latest Commit Details
+            - **Message**: ${{ steps.commit-details.outputs.commit_message }}
+            - **Date**: ${{ steps.commit-details.outputs.commit_date }}
+            - **Link**: ${{ steps.commit-details.outputs.commit_url }}
+
+            ### Commit History
+            Compare changes: https://github.com/mholt/caddy-ratelimit/compare/${{ steps.get-sha.outputs.current_sha }}...${{ steps.get-sha.outputs.latest_sha }}
+
+            ---
+
+            🤖 This PR was automatically created by the `update-caddy-ratelimit-sha` workflow.
+
+            Please review the changes in the upstream repository before merging.
+          labels: |
+            dependencies
+            automated
+            caddy-plugin
+          assignees: ${{ github.repository_owner }}
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.get-sha.outputs.needs_update }}" = "true" ]; then
+            echo "✅ Created PR to update caddy-ratelimit from ${{ steps.get-sha.outputs.current_sha }} to ${{ steps.get-sha.outputs.latest_sha }}"
+          else
+            echo "ℹ️ No update needed - already using latest commit ${{ steps.get-sha.outputs.current_sha }}"
+          fi

@@ -6,6 +6,9 @@
 # - PRs are created for version updates (never pushes directly)
 # - Use branch protection rules to prevent direct pushes to main
 # - Group updates to reduce PR noise
+#
+# Note: The caddy-ratelimit plugin SHA is updated by the
+# update-caddy-ratelimit-sha.yml GitHub Actions workflow (weekly)
 
 version: 2
 updates:
