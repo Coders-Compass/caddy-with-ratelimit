@@ -1,9 +1,12 @@
-FROM caddy:2-builder AS builder
+# Pinned versions for reproducibility
+# Caddy: https://github.com/caddyserver/caddy/releases
+# Rate limit plugin: https://github.com/mholt/caddy-ratelimit (no releases, using commit SHA)
+FROM caddy:2.10.2-builder AS builder
 
 RUN xcaddy build \
-    --with github.com/mholt/caddy-ratelimit
+    --with github.com/mholt/caddy-ratelimit@c558ebeb84fc942adeadba8a15fb5648eb8f6e16
 
-FROM caddy:2
+FROM caddy:2.10.2
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 

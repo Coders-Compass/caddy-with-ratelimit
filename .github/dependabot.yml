@@ -1,0 +1,34 @@
+# Dependabot configuration for automated version updates
+# Documentation: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Best Practices:
+# - Dependabot always targets the default branch (main)
+# - PRs are created for version updates (never pushes directly)
+# - Use branch protection rules to prevent direct pushes to main
+# - Group updates to reduce PR noise
+
+version: 2
+updates:
+  # Update Docker base images (Caddy)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "05:38"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+      - "automated"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    reviewers:
+      - "hungrybluedev"
+    # Group all Docker updates together
+    groups:
+      docker-images:
+        patterns:
+          - "*"
