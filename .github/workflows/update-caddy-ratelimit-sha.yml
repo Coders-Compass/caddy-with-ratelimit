@@ -21,8 +21,9 @@ jobs:
       - name: Get latest commit SHA from caddy-ratelimit
         id: get-sha
         run: |
-          # Fetch the latest commit SHA from the main branch
-          LATEST_SHA=$(curl -s https://api.github.com/repos/mholt/caddy-ratelimit/commits/main | jq -r '.sha')
+          # Fetch the latest commit SHA from the master branch
+          LATEST_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/mholt/caddy-ratelimit/branches/master | jq -r '.commit.sha')
           echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
           echo "Latest SHA: $LATEST_SHA"
 
@@ -45,7 +46,8 @@ jobs:
         id: commit-details
         run: |
           # Get commit message and date
-          COMMIT_INFO=$(curl -s https://api.github.com/repos/mholt/caddy-ratelimit/commits/${{ steps.get-sha.outputs.latest_sha }})
+          COMMIT_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/mholt/caddy-ratelimit/commits/${{ steps.get-sha.outputs.latest_sha }})
           COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message' | head -n 1)
           COMMIT_DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.author.date')
           COMMIT_URL=$(echo "$COMMIT_INFO" | jq -r '.html_url')
@@ -71,14 +73,12 @@ jobs:
         if: steps.get-sha.outputs.needs_update == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
           commit-message: |
             Update caddy-ratelimit plugin to ${{ steps.get-sha.outputs.latest_sha }}
 
-            Latest commit from mholt/caddy-ratelimit:
+            Latest commit from mholt/caddy-ratelimit (master):
             - Message: ${{ steps.commit-details.outputs.commit_message }}
-            - Date: ${{ steps.commit-details.outputs.commit_date }}
-            - URL: ${{ steps.commit-details.outputs.commit_url }}
           branch: update-caddy-ratelimit-sha
           delete-branch: true
           title: "chore: update caddy-ratelimit plugin to latest commit"
