@@ -71,9 +71,9 @@ jobs:
 
       - name: Create Pull Request
         if: steps.get-sha.outputs.needs_update == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: |
             Update caddy-ratelimit plugin to ${{ steps.get-sha.outputs.latest_sha }}
 
