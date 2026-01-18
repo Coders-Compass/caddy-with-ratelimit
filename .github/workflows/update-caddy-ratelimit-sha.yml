@@ -16,6 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          token: ${{ secrets.PAT_PR }}
           fetch-depth: 0
 
       - name: Get latest commit SHA from caddy-ratelimit
