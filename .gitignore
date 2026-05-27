@@ -17,3 +17,6 @@
 # Environment files
 .env
 .env.local
+
+# Local devcontainer setup
+.devcontainer
