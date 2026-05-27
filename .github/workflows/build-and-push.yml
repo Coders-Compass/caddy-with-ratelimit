@@ -109,6 +109,7 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+      security-events: write  # SARIF upload to GitHub Code Scanning
 
     steps:
       - name: Checkout repository
@@ -135,6 +136,87 @@ jobs:
             type=ref,event=branch
             type=schedule,pattern={{date 'YYYYMMDD'}}
 
+      # Build amd64 image locally so Trivy can scan a concrete image before we
+      # push to GHCR. The push step below reuses the BuildKit cache populated
+      # here, so the marginal cost is the arm64 layers only.
+      - name: Build image for vulnerability scan (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: caddy-with-ratelimit:scan-target
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — table report (informational, all severities)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: caddy-with-ratelimit:scan-target
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          output: trivy-table.txt
+          exit-code: '0'
+          trivyignores: .trivyignore
+
+      - name: Trivy — SARIF for GitHub Code Scanning
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: caddy-with-ratelimit:scan-target
+          format: sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          output: trivy-results.sarif
+          exit-code: '0'
+          trivyignores: .trivyignore
+
+      - name: Trivy — gate (fail on CRITICAL)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: caddy-with-ratelimit:scan-target
+          format: table
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      - name: Append Trivy report to job summary
+        if: always()
+        run: |
+          if [ -f trivy-table.txt ] && [ -s trivy-table.txt ]; then
+            {
+              echo "## 🔒 Trivy image scan"
+              echo ""
+              echo '```'
+              cat trivy-table.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## 🔒 Trivy image scan" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ No vulnerabilities found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Trivy results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            trivy-table.txt
+            trivy-results.sarif
+          retention-days: 90
+          if-no-files-found: warn
+
+      # Multi-arch push. sbom + provenance attach SPDX SBOM and SLSA mode=max
+      # provenance as OCI artifacts on the registry — visible via
+      # `docker buildx imagetools inspect`.
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v7
@@ -146,6 +228,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v4
