@@ -4,7 +4,7 @@
 FROM caddy:2.11.3-builder AS builder
 
 RUN xcaddy build \
-    --with github.com/mholt/caddy-ratelimit@b8d8c9a9d99ee352d675cbbe416ec2b489fc8cab
+    --with github.com/mholt/caddy-ratelimit@16aecbbcb8ca07dc1c671e263379606ff9493c55
 
 FROM caddy:2.11.3
 
