@@ -3,6 +3,7 @@
 
 # Test artifacts
 /test/caddy/
+/test/results/
 
 # macOS
 .DS_Store

@@ -1,17 +1,44 @@
 {
-    order rate_limit before respond
+	order rate_limit before respond
+	metrics
+
+	servers {
+		trusted_proxies static private_ranges
+	}
 }
 
 :80 {
-    # Rate limit: 5 requests per 10 seconds per IP
-    rate_limit {
-        zone test_zone {
-            key {http.request.remote.host}
-            events 5
-            window 10s
-        }
-    }
+	# Prometheus metrics: the caddy-ratelimit plugin's counters
+	# (caddy_rate_limit_declined_requests_total etc.) plus Caddy's HTTP server
+	# metrics are exposed here. Served by a dedicated handle{} so /metrics
+	# itself is not rate-limited.
+	handle /metrics {
+		metrics
+	}
 
-    # Simple endpoint that responds with client IP
-    respond "OK - Your IP: {http.request.remote.host}" 200
+	# Stricter zone used for multi-zone isolation tests.
+	handle /burst* {
+		rate_limit {
+			zone burst_zone {
+				key {client_ip}
+				events 3
+				window 5s
+			}
+		}
+		respond "OK burst_zone - {client_ip}" 200
+	}
+
+	# Default route: 5 requests / 10s per client IP. Existing tests target this.
+	# Keyed by {client_ip} so X-Forwarded-For from trusted (private-range) peers
+	# is honored. It lets a single load tester exercise per-IP isolation.
+	handle {
+		rate_limit {
+			zone test_zone {
+				key {client_ip}
+				events 5
+				window 10s
+			}
+		}
+		respond "OK test_zone - {client_ip}" 200
+	}
 }

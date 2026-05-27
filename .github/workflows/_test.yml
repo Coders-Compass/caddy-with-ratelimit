@@ -1,0 +1,122 @@
+name: Test (reusable)
+
+# Reusable workflow that builds the image, runs functional + load tests, and
+# publishes machine-/human-readable results. Called by build-and-push.yml
+# (as the gate before publishing) and by test-rate-limiting.yml (on every PR).
+
+on:
+  workflow_call:
+
+# oha is pinned by version + sha256. The upstream project does not publish a
+# checksums file, so the SHA256 here was computed manually from the published
+# linux/amd64 release binary. Bump both together when upgrading.
+env:
+  OHA_VERSION: v1.4.7
+  OHA_SHA256: abdb3a2aabd60905112b5d4dc2b73e12779b2f47520e52ba8237516a88b6fdf3
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build test image
+        run: docker build -t caddy-with-ratelimit:test .
+
+      - name: Verify rate_limit module is loaded
+        run: |
+          docker run --rm caddy-with-ratelimit:test caddy list-modules | grep rate_limit
+          echo "✓ Rate limit module verified"
+
+      - name: Start test environment
+        run: |
+          cd test
+          docker compose up -d
+
+      - name: Wait for Caddy and /metrics to be ready
+        run: |
+          echo "Waiting for Caddy to start..."
+          max_attempts=30
+          attempt=0
+          while ! curl -fsS http://localhost:8080/metrics >/dev/null 2>&1; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "✗ Caddy /metrics did not become ready in time"
+              docker compose -f test/docker-compose.yml logs
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "✓ Caddy ready, /metrics reachable"
+
+      - name: Run basic rate limiting tests
+        run: |
+          cd test
+          chmod +x test.sh
+          ./test.sh
+
+      - name: Install oha (pinned + checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o oha "https://github.com/hatoo/oha/releases/download/${OHA_VERSION}/oha-linux-amd64"
+          echo "${OHA_SHA256}  oha" | sha256sum -c -
+          chmod +x oha
+          sudo mv oha /usr/local/bin/
+          oha --version
+
+      - name: Run load tests
+        id: load-tests
+        run: |
+          cd test
+          chmod +x load-test.sh
+          ./load-test.sh
+
+      - name: Upload load-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rate-limit-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test/results/
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Append results to job summary
+        if: always()
+        run: |
+          if [ -f test/results/summary.md ]; then
+            cat test/results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::test/results/summary.md not produced — load-test likely failed before writing the summary."
+          fi
+
+      - name: Find existing rate-limit results comment
+        if: always() && github.event_name == 'pull_request'
+        id: find-comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- rate-limit-results -->'
+
+      - name: Create or update sticky PR comment
+        if: always() && github.event_name == 'pull_request' && hashFiles('test/results/summary.md') != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: test/results/summary.md
+
+      - name: Show Caddy logs on failure
+        if: failure()
+        run: docker compose -f test/docker-compose.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd test
+          docker compose down -v
