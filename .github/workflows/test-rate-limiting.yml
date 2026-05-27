@@ -1,14 +1,11 @@
 name: Test Rate Limiting
 
+# PR-only entrypoint to the reusable _test.yml suite (functional + load tests).
+# Push-to-main is intentionally not a trigger here — build-and-push.yml runs the
+# same _test.yml as a gate before publishing, so a push trigger would duplicate
+# the load tests. See issue #8.
+
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "Dockerfile"
-      - "test/**"
-      - ".github/workflows/test-rate-limiting.yml"
-      - ".github/workflows/_test.yml"
   pull_request:
     branches:
       - main
