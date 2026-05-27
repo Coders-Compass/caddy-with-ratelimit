@@ -17,6 +17,83 @@ env:
   IMAGE_NAME: coders-compass/caddy-with-ratelimit
 
 jobs:
+  plugin-freshness-check:
+    # Independent watchdog: surfaces it when the auto-update workflow has gone
+    # silent (e.g. GitHub auto-disabled it for inactivity) or when the pinned
+    # plugin SHA has drifted behind upstream master. Never fails the build —
+    # uses ::warning::/::error:: annotations + step summary only.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Compare pinned plugin SHA against upstream master
+        id: freshness
+        run: |
+          set -euo pipefail
+
+          API_RESPONSE=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mholt/caddy-ratelimit/branches/master)
+          UPSTREAM_SHA=$(echo "$API_RESPONSE" | jq -r '.commit.sha')
+
+          if ! [[ "$UPSTREAM_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::warning::Could not fetch upstream master SHA (got: '$UPSTREAM_SHA'); skipping freshness check."
+            echo "## Plugin Freshness Check" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Upstream SHA lookup failed — skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          PINNED_SHA=$(grep -oP 'github\.com/mholt/caddy-ratelimit@\K[a-f0-9]{40}' Dockerfile)
+          echo "Upstream master: $UPSTREAM_SHA"
+          echo "Pinned in Dockerfile: $PINNED_SHA"
+
+          {
+            echo "## Plugin Freshness Check"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Pinned in Dockerfile | \`$PINNED_SHA\` |"
+            echo "| Upstream master | \`$UPSTREAM_SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$PINNED_SHA" = "$UPSTREAM_SHA" ]; then
+            echo "| Status | ✅ up to date |" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Plugin SHA is up to date."
+          else
+            COMPARE_URL="https://github.com/mholt/caddy-ratelimit/compare/${PINNED_SHA}...${UPSTREAM_SHA}"
+            echo "| Status | ⚠️ behind upstream — [compare](${COMPARE_URL}) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Plugin pinned to ${PINNED_SHA} but upstream master is ${UPSTREAM_SHA}. See ${COMPARE_URL}. The dedicated update workflow opens the PR — this is just an early-warning."
+          fi
+
+      - name: Verify update workflow is not disabled
+        run: |
+          set -euo pipefail
+
+          WORKFLOW_FILE="update-caddy-ratelimit-sha.yml"
+          API_RESPONSE=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${WORKFLOW_FILE}")
+          STATE=$(echo "$API_RESPONSE" | jq -r '.state')
+
+          echo "Workflow ${WORKFLOW_FILE} state: ${STATE}"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Update workflow state:** \`${STATE}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATE" != "active" ]; then
+            REMEDIATION="Re-enable via UI (Actions → Update Caddy Rate Limit Plugin SHA → Enable workflow) or 'gh workflow enable ${WORKFLOW_FILE}'."
+            echo "::error::Auto-update workflow ${WORKFLOW_FILE} is in state '${STATE}' (expected 'active'). ${REMEDIATION}"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ **${REMEDIATION}**" >> "$GITHUB_STEP_SUMMARY"
+            # Surface loudly but do not gate the build — the build itself is independent.
+          fi
+
   test:
     runs-on: ubuntu-latest
     
