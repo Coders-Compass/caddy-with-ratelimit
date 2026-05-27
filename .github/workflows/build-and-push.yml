@@ -150,7 +150,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy — table report (informational, all severities)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: caddy-with-ratelimit:scan-target
           format: table
@@ -160,7 +160,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Trivy — SARIF for GitHub Code Scanning
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: caddy-with-ratelimit:scan-target
           format: sarif
@@ -170,7 +170,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Trivy — gate (fail on CRITICAL)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: caddy-with-ratelimit:scan-target
           format: table
