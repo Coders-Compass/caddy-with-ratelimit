@@ -3,7 +3,13 @@ name: Update Caddy Rate Limit Plugin SHA
 on:
   schedule:
     - cron: "0 6 * * 0"
-  workflow_dispatch: # Allow manual triggering
+  # Non-schedule triggers keep the workflow from being auto-disabled by GitHub
+  # for inactivity. The job is idempotent and exits in seconds when no update
+  # is needed.
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,23 +27,35 @@ jobs:
       - name: Get latest commit SHA from caddy-ratelimit
         id: get-sha
         run: |
-          # Fetch the latest commit SHA from the master branch
-          LATEST_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/mholt/caddy-ratelimit/branches/master | jq -r '.commit.sha')
-          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          set -euo pipefail
+
+          API_RESPONSE=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mholt/caddy-ratelimit/branches/master)
+          LATEST_SHA=$(echo "$API_RESPONSE" | jq -r '.commit.sha')
+
+          if ! [[ "$LATEST_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Upstream SHA fetch returned a value that is not a 40-char hex SHA: '$LATEST_SHA'"
+            echo "API response was: $API_RESPONSE"
+            exit 1
+          fi
           echo "Latest SHA: $LATEST_SHA"
+          echo "latest_sha=$LATEST_SHA" >> "$GITHUB_OUTPUT"
 
-          # Get current SHA from Dockerfile
           CURRENT_SHA=$(grep -oP 'github\.com/mholt/caddy-ratelimit@\K[a-f0-9]{40}' Dockerfile)
-          echo "current_sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+          if ! [[ "$CURRENT_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Could not extract a 40-char hex SHA from Dockerfile (got: '$CURRENT_SHA')"
+            exit 1
+          fi
           echo "Current SHA: $CURRENT_SHA"
+          echo "current_sha=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
 
-          # Check if update is needed
           if [ "$LATEST_SHA" = "$CURRENT_SHA" ]; then
-            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
             echo "No update needed - already on latest commit"
           else
-            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
             echo "Update needed: $CURRENT_SHA -> $LATEST_SHA"
           fi
 
@@ -45,16 +63,19 @@ jobs:
         if: steps.get-sha.outputs.needs_update == 'true'
         id: commit-details
         run: |
-          # Get commit message and date
-          COMMIT_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          set -euo pipefail
+
+          COMMIT_INFO=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/mholt/caddy-ratelimit/commits/${{ steps.get-sha.outputs.latest_sha }})
           COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message' | head -n 1)
           COMMIT_DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.author.date')
           COMMIT_URL=$(echo "$COMMIT_INFO" | jq -r '.html_url')
 
-          echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-          echo "commit_date=$COMMIT_DATE" >> $GITHUB_OUTPUT
-          echo "commit_url=$COMMIT_URL" >> $GITHUB_OUTPUT
+          echo "commit_message=$COMMIT_MESSAGE" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
+          echo "commit_url=$COMMIT_URL" >> "$GITHUB_OUTPUT"
 
           echo "Commit Message: $COMMIT_MESSAGE"
           echo "Commit Date: $COMMIT_DATE"
@@ -63,7 +84,6 @@ jobs:
       - name: Update Dockerfile
         if: steps.get-sha.outputs.needs_update == 'true'
         run: |
-          # Replace the SHA in the Dockerfile
           sed -i "s/github\.com\/mholt\/caddy-ratelimit@[a-f0-9]\{40\}/github.com\/mholt\/caddy-ratelimit@${{ steps.get-sha.outputs.latest_sha }}/g" Dockerfile
 
           echo "Updated Dockerfile with new SHA"
@@ -71,6 +91,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.get-sha.outputs.needs_update == 'true'
+        id: create-pr
         uses: peter-evans/create-pull-request@v8
         with:
           commit-message: |
@@ -110,9 +131,38 @@ jobs:
           assignees: ${{ github.repository_owner }}
 
       - name: Summary
+        if: always()
         run: |
-          if [ "${{ steps.get-sha.outputs.needs_update }}" = "true" ]; then
-            echo "✅ Created PR to update caddy-ratelimit from ${{ steps.get-sha.outputs.current_sha }} to ${{ steps.get-sha.outputs.latest_sha }}"
+          set -euo pipefail
+
+          NEEDS_UPDATE="${{ steps.get-sha.outputs.needs_update }}"
+          CURRENT_SHA="${{ steps.get-sha.outputs.current_sha }}"
+          LATEST_SHA="${{ steps.get-sha.outputs.latest_sha }}"
+          PR_OPERATION="${{ steps.create-pr.outputs.pull-request-operation }}"
+          PR_NUMBER="${{ steps.create-pr.outputs.pull-request-number }}"
+          PR_URL="${{ steps.create-pr.outputs.pull-request-url }}"
+
+          {
+            echo "## Caddy Rate Limit Plugin SHA Check"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Current pinned SHA | \`${CURRENT_SHA:-unknown}\` |"
+            echo "| Upstream master SHA | \`${LATEST_SHA:-unknown}\` |"
+            echo "| Needs update | \`${NEEDS_UPDATE:-unknown}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$NEEDS_UPDATE" = "true" ]; then
+            if [ -n "$PR_URL" ]; then
+              echo "| PR | [#${PR_NUMBER}](${PR_URL}) (\`${PR_OPERATION}\`) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "✅ Update PR ${PR_OPERATION}: ${PR_URL}"
+            else
+              echo "| PR | ❌ NOT CREATED (operation: \`${PR_OPERATION:-none}\`) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Update was needed (${CURRENT_SHA} -> ${LATEST_SHA}) but no PR was opened. peter-evans/create-pull-request reported operation='${PR_OPERATION:-none}'. Check repo setting 'Allow GitHub Actions to create and approve pull requests' (Settings → Actions → General → Workflow permissions)."
+              exit 1
+            fi
           else
-            echo "ℹ️ No update needed - already using latest commit ${{ steps.get-sha.outputs.current_sha }}"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "ℹ️ Already on the latest commit — no PR needed." >> "$GITHUB_STEP_SUMMARY"
+            echo "ℹ️ No update needed - already using latest commit ${CURRENT_SHA}"
           fi
