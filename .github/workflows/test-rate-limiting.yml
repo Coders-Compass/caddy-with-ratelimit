@@ -1,14 +1,6 @@
 name: Test Rate Limiting
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "Dockerfile"
-      - "test/**"
-      - ".github/workflows/test-rate-limiting.yml"
-      - ".github/workflows/_test.yml"
   pull_request:
     branches:
       - main
