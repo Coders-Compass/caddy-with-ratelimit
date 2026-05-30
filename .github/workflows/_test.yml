@@ -77,7 +77,7 @@ jobs:
 
       - name: Upload load-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rate-limit-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: test/results/
@@ -96,7 +96,7 @@ jobs:
       - name: Find existing rate-limit results comment
         if: always() && github.event_name == 'pull_request'
         id: find-comment
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
@@ -104,7 +104,7 @@ jobs:
 
       - name: Create or update sticky PR comment
         if: always() && github.event_name == 'pull_request' && hashFiles('test/results/summary.md') != ''
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
